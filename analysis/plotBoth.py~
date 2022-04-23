@@ -1,0 +1,175 @@
+#!/usr/bin/python3
+import scipy.fftpack
+import scipy.interpolate
+import scipy.io.wavfile as wavfile
+from scipy import signal
+from scipy.signal import butter, lfilter, freqz
+import numpy as np
+from matplotlib import pyplot as plt
+
+import sys
+import time
+
+def fft(signal,sampleInterval):
+    # FFT = abs(scipy.fftpack.fft(signal))
+    FFT = scipy.fftpack.fft(signal)
+    FFT_side = np.real(FFT[range(len(signal)//2)]) # one side FFT range
+    freqs = scipy.fftpack.fftfreq(len(signal),sampleInterval)
+    freqs_side = freqs[range(len(signal)//2)] # one side frequency range
+    return freqs_side, FFT_side
+
+# https://gist.github.com/junzis/e06eca03747fc194e322
+def butter_lowpass(cutoff, fs, order=5):
+    nyq = 0.5 * fs
+    normal_cutoff = cutoff / nyq
+    b, a = butter(order, normal_cutoff, btype='low', analog=False)
+    return b, a
+
+def butter_lowpass_filter(data, cutoff, fs, order=2):
+    b, a = butter_lowpass(cutoff, fs, order=order)
+    y = lfilter(b, a, data)
+    return y
+
+
+def butter_bandpass(lowcut, highcut, fs, order=5):
+    nyq = 0.5 * fs
+    low = lowcut / nyq
+    high = highcut / nyq
+    b, a = butter(order, [low, high], btype='band')
+    return b, a
+
+
+def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
+    b, a = butter_bandpass(lowcut, highcut, fs, order=order)
+    y = lfilter(b, a, data)
+    return y
+
+
+##############################################ACCEL PLOTTER
+def accelPlot(axs,subFileName,filter=False,bandFilter=False,cutoff=100,lowcut=25,highcut=400,order=5):
+    xs = []
+    ys = []
+    zs = []
+    ###READ FROM FILE
+    with open(subFileName + "Accel",'r') as intFile:
+        while intFile:
+            try:
+                xs.append(int(intFile.readline()))
+                ys.append(int(intFile.readline()))
+                zs.append(int(intFile.readline()))
+            except:
+                print(f"exception Probablly just newline at end of int file")
+                break
+    #####ONLY PROCESS Y AXIS
+    signal = ys
+    fs_rate = 400
+    sampleCount = len(signal)
+    secs = sampleCount / float(fs_rate)
+
+    ##################FILTER ACCEL
+    if filter:
+        if bandFilter:
+            signal = butter_bandpass_filter(signal,lowcut,highcut,fs_rate,order=order)
+        else:
+            signal = butter_lowpass_filter(signal,cutoff,fs_rate,order=order)
+
+    ###TIME AXIS
+    sampleInterval = 1.0/fs_rate # sampling interval in time
+    time_axis = np.arange(0, secs, sampleInterval) # time vector as scipy arange field / numpy.ndarray
+
+    #L TIME ACCEL
+    l_plt = axs[0][0]
+    l_plt.plot(time_axis,signal, "g") # plotting the signal
+    l_plt.set_title("Accel Y Axis Time Domain")
+    l_plt.set_xlabel('Time')
+    l_plt.set_ylabel('Amplitude')
+
+    #LEFT FREQ ACCEL
+    freqs_side,FFT_side = fft(signal,sampleInterval)
+    cutMin = int(len(freqs_side)/200) # equates to 59 of about 12,000 with oneMinute Sample
+    print(f'Accel cutoff {cutMin} of {len(signal)}')
+
+    l_plt = axs[1][0]
+    # print("**************************",type(FFT_side),FFT_side.shape)
+    # FFT_side = np.real(FFT_side)
+    l_plt.plot(freqs_side[cutMin:], FFT_side[cutMin:], "g") # plotting the positive fft spectrum
+    l_plt.set_title(f"ABS freq range: {freqs_side[cutMin]:.2f} to {freqs_side[-1]:.2f}")
+    l_plt.set_xlabel('Frequency (Hz)')
+    l_plt.set_ylabel('Amplitude')
+
+
+
+################################################MIC PLOTTER
+def micPlot(axs,subFileName,filter=False,bandFilter=False,cutoff=100,lowcut=25,highcut=400,order=5):
+    fs_rate, signal = wavfile.read(subFileName + "Mic.wav")
+
+    ######################CLEAN DIRTY SPIKE
+    cutOff = .05 * len(signal)
+    cutOff = int(cutOff - (cutOff % 6))
+    signal = signal[cutOff:] # cut 5% for noice reduction
+    print(f'Mic signal. Clipping {cutOff} of {len(signal)} to clean initial spike.')
+
+    l_audio = len(signal.shape)
+    L = []
+    R = []
+
+    if l_audio == 2:
+        for arr in signal:
+            L.append(arr[0])
+            R.append(arr[1])
+        L = np.array(L)
+        R = np.array(R)
+
+    ####################MIC FILTER
+    if filter:
+        if bandFilter:
+            L = butter_bandpass_filter(L,lowcut,highcut,fs_rate,order=order)
+        else:
+            L = butter_lowpass_filter(L,cutoff,fs_rate,order=order)
+
+
+    sampleCount = L.shape[0]
+    secs = sampleCount / float(fs_rate)
+
+    sampleInterval = 1.0/fs_rate # sampling interval in time
+
+    time_axis = np.arange(0, secs, sampleInterval) # time vector as scipy arange field / numpy.ndarray
+
+    ####L TIME
+    l_plt = axs[0][1]
+    l_plt.plot(time_axis,L, "r",label="Left Channel") # plotting the signal
+    l_plt.set_title("Single Channel Audio Time Domain")
+    l_plt.set_xlabel('Time')
+    l_plt.set_ylabel('Amplitude')
+
+    #LEFT CHANNEL STUFF, FREQ
+    freqs_side, FFT_side = fft(L,sampleInterval)
+    cutMin = int(len(freqs_side)/15000)
+    print(f'MIC FREQ CLIP {cutMin} of {len(freqs_side)}')
+
+    l_plt = axs[1][1]
+    # l_plt.set_xlim(0,200)
+    l_plt.plot(freqs_side[cutMin:], FFT_side[cutMin:], "r") # plotting the positive fft spectrum
+    l_plt.set_title(f"Audio ABS freq range: {freqs_side[cutMin]:.2f} to {freqs_side[-1]:.2f}")
+    l_plt.set_xlabel('Frequency (Hz)')
+    l_plt.set_ylabel('ABS Amplitude')
+
+def plot():
+    if len(sys.argv) < 1:
+        print('Give subFileName on CL')
+    try:
+        fig, axs = plt.subplots(nrows=2,ncols=2)
+        fig.set_size_inches(25,12)
+        subFileName = sys.argv[1]
+        # plt.rcParams['figure.dpi'] = 100
+        accelPlot(axs,subFileName,filter=False,bandFilter=False,cutoff=80,lowcut=1000,highcut=2200,order=5)
+        micPlot(axs,subFileName,filter=True,bandFilter=True,cutoff=200,lowcut=1,highcut=2000,order=5)
+
+        plt.show()
+
+    except KeyboardInterrupt:
+
+        plt.close(fig)
+
+plot()
+
